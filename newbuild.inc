@@ -3,6 +3,7 @@
 #endif
 	#define _newbuild_included
 
+#include <sdktools>
 
 #define IsClientValid(%1)	( (%1) && (%1) <= MaxClients && IsClientInGame((%1)) )
 #define PLYR			MAXPLAYERS+1
@@ -14,7 +15,7 @@ enum { __a = 1, __b, __c, __d, __e, __f, __g, __h, __i, __j, __k, __l, __m,
 	__n, __o, __p, __q, __r, __s, __t, __u, __v, __w, __x, __y, __z
 };
 
-enum {		// flag enum.		NOTE: Flags DO NOTHING, they're merely for organization
+enum {		// flag enum.
 	FLAG_RED = 1<<__a,		// useable by red team
 	FLAG_BLU = 1<<__b,		// useable by blu team. You can set both flags for the building to share with both teams
 	FLAG_REDBUILT = 1<<__c,		// built by someone in red team, set internally by the core plugin
@@ -25,7 +26,7 @@ enum {		// flag enum.		NOTE: Flags DO NOTHING, they're merely for organization
 	FLAG_METALREQ = 1<<__h,		// requires metal to build ?
 	FLAG_UPGRADEABLE = 1<<__i,	// can this structure be upgraded ?
 	FLAG_TEAMUNCOLLIDEABLE = 1<<__j,	// can teammates go through this ? Advised if structure can block paths
-	FLAG_REPLACE = 1<<__k,		// does it replace an existing engineer building ? This replaces Dispensers
+	//FLAG_REPLACE = 1<<__k,		// does it replace an existing engineer building ? Unsupported for now
 	FLAG_REQENG = 1<<__l,		// do you need to be an engie to build this ?
 	FLAG_UPGRADEENG = 1<<__m,	// do you need to be an engie to upgrade this ?
 	FLAG_FIXENG = 1<<__n,		// do you need to be an engie to fix this ?
@@ -34,9 +35,12 @@ enum {		// flag enum.		NOTE: Flags DO NOTHING, they're merely for organization
 	FLAG_KILLDISC = 1<<__q,		// destroy structure when owner disconnects?
 	FLAG_KILLTEAMSWITCH = 1<<__r,	// destroy structure when owner switches team?
 	FLAG_KILLDEATH = 1<<__s,	// destroy structure when owner dies?
-	FLAG_METALREQUPGRADE = 1<<__t,	// requires metal to upgrade?
+	FLAG_METALREQUPGRADE = 1<<__t,	// requires metal to upgrade? if set, automatically sets FLAG_UPGRADEENG flag
 	FLAG_REQGUNSLINGER = 1<<__u,	// building requires gunslinger to build?
 	FLAG_BUILT = 1<<__v,		// fully built and is doing its job.
+	FLAG_METALREQFIX = 1<<__w,	// requires metal to fix? If set, will automatically set FLAG_FIXENG flag
+	FLAG_HITSPEEDSBUILD = 1<<__x,	// does wrenches or melees speed up building?
+	FLAG_HITSPEEDENG = 1<<__y,	// only engie melees can speed up building?
 };
 
 /*************************************************/
@@ -802,6 +806,12 @@ stock Handle GetSubPlugin(StringMap hndl)
 	// Shouldn't actually get here, but we keep it just incase
 	return null;
 }
+stock int GetBuilder(const int ent)
+{
+	if ( IsValidEdict(ent) && IsValidEntity(ent) )
+		return GetEntPropEnt(ent, Prop_Send, "m_hBuilder");
+	return -1;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -825,6 +835,7 @@ methodmap CStructure < Handle {
 	property int iMaxHealth			- ditto, max health it can go to
 	property int iMetalBuild		- how much metal is required to first create this building?
 	property int iUpgradeLvl		- current upgrade level
+	property int iMaxUpgradeLvl		- max level building can reach
 	property float flBuildTime		- when created, how long it takes for building to start doing its thing?
 	*/
 };
@@ -839,10 +850,12 @@ enum {	// call back types
 };
 
 typeset NBHookCB {
-	// OnBuild
 	// OnThink
 	// OnMenuSelected
 	function void (const int iModuleIndex, const CStructure building);
+	
+	// OnBuild
+	function void (const int iModuleIndex, const CStructure building, const int buildingRef);
 	
 	// OnEngieInteract
 	function void (const int iModuleIndex, const CStructure building, const int userid);

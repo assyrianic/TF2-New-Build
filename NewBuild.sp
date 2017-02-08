@@ -8,7 +8,7 @@
 #pragma semicolon		1
 #pragma newdecls		required
 
-#define PLUGIN_VERSION		"1.0.0 Alpha"
+#define PLUGIN_VERSION		"1.0.5 Alpha"
 
 public Plugin myinfo = {
 	name 			= "New Structure Buildings",
@@ -36,7 +36,7 @@ public void OnPluginStart()
 	hArrayBuildings = new ArrayList();
 	hTrieBuildings = new StringMap();
 	
-	pNBForws[OnBuild]		=new PrivForws( CreateForward(ET_Ignore, Param_Cell, Param_Cell) );
+	pNBForws[OnBuild]		=new PrivForws( CreateForward(ET_Ignore, Param_Cell, Param_Cell, Param_Cell) );
 	pNBForws[OnEngieInteract]	=new PrivForws( CreateForward(ET_Ignore, Param_Cell, Param_Cell, Param_Cell) );
 	pNBForws[OnMenuSelected]	=new PrivForws( CreateForward(ET_Ignore, Param_Cell, Param_Cell) );
 	pNBForws[OnThink]		=new PrivForws( CreateForward(ET_Ignore, Param_Cell, Param_Cell) );
@@ -73,6 +73,7 @@ public void OnPluginStart()
 			continue;
 		OnClientPutInServer(i);
 	}
+	CreateTimer(0.1, Timer_BuildingThink, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public void OnClientPutInServer(int client)
@@ -86,7 +87,6 @@ public void OnMapStart()
 	PrecacheSound("weapons/wrench_hit_build_success1.wav", true);
 	PrecacheSound("weapons/wrench_hit_build_success2.wav", true);
 	PrecacheSound("weapons/wrench_hit_build_fail.wav", true);
-	CreateTimer(0.1, Timer_BuildingThink, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public Action CreateNewStructureMenu(int client, int args)
@@ -94,7 +94,7 @@ public Action CreateNewStructureMenu(int client, int args)
 	if (!NewBuildCvars[Enabled].BoolValue)
 		return Plugin_Continue;
 	else if ( client <= 0 )
-		return Plugin_Handled;
+		return Plugin_Continue;
 	else if ( !IsPlayerAlive(client) or IsClientObserver(client) or GetClientTeam(client) < 2 ) {
 		ReplyToCommand(client, "[NewBuild] You need to be alive, on a team to build!");
 		return Plugin_Handled;
@@ -114,7 +114,7 @@ public Action CreateNewStructureMenu(int client, int args)
 	
 	char name[64], num[10];
 	Menu bases = new Menu( MenuHandler_BuildStructure );
-	
+	bases.SetTitle("NewBuild Available Buildings");
 	for (int i=0 ; i<count ; ++i) {
 		StringMap map = hArrayBuildings.Get(i);
 		map.GetString("Name", name, sizeof(name));
@@ -179,6 +179,7 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 {
 	if (base.iBuilder <= 0)
 		return false;
+	
 	int client = base.iBuilder;
 	int team = GetClientTeam(client);
 	
@@ -217,6 +218,14 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 			return false;
 		}
 	}
+	if (flags & FLAG_METALREQFIX) {
+		if ( !(flags & FLAG_FIXENG) )	// if it requires metal to fix, it requires engie to fix then
+			base.iFlags |= FLAG_FIXENG;
+	}
+	if (flags & FLAG_METALREQUPGRADE) {
+		if ( !(flags & FLAG_UPGRADEENG) )	// if it requires metal to upgrade, it requires engie to upgrade then
+			base.iFlags |= FLAG_UPGRADEENG;
+	}
 	if (flags & FLAG_TEAM) {		// check if teammates have already built one of this
 		CBaseStructure map;
 		for (int i=0 ; i<hConstructs[team-2].Length ; ++i) {
@@ -245,20 +254,20 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 				continue;
 
 			if (IsValidEntity(map.iEntity) and map.iBuilder == client) {
-				CPrintToChat(client, "{red}[NewBuild] {white}You already have this building built dumby head!");
+				CPrintToChat(client, "{red}[NewBuild] {white}You already have this building built stupid!");
 				CreateTimer( 0.1, RemoveEnt, EntIndexToEntRef(iBuilding) );
 				return false;
 			}
 		}
 	}
+	SetEntProp( iBuilding, Prop_Send, "m_iTeamNum", team );
 	
 	pNBForws[OnBuild].Start();
 	Call_PushCell(base.iType);
 	Call_PushCell(base);
-	Call_PushCell(iBuilding);	// set the model, health, other props, and targetname during this phase
+	Call_PushCell(EntIndexToEntRef(iBuilding));	// set the model, health, other props, and targetname during this phase
 	Call_Finish();
 	
-	SetEntProp( iBuilding, Prop_Send, "m_iTeamNum", team );
 	base.iFlags |= ( (team==2) ? FLAG_REDBUILT : FLAG_BLUBUILT );
 	
 	float mins[3], maxs[3];
@@ -296,7 +305,7 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 		if (flags & FLAG_GLOW) {
 			int iGlow = CreateEntityByName("tf_taunt_prop");
 			if (iGlow != -1) {
-				base.iGlowRef = EntIndexToEntRef(iGlow);
+				base.iGlowRef = iGlow;
 				char modelname[PLATFORM_MAX_PATH];
 				GetEntPropString(iBuilding, Prop_Data, "m_ModelName", modelname, PLATFORM_MAX_PATH);
 				SetEntityModel(iGlow, modelname);
@@ -329,7 +338,7 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 				else if (GetClientTeam(i) != team)
 					continue;
 
-				CPrintToChat(i, "{red}[NewBuild] {white}%s Built, Will activate in %f Minutes.", pluginName, base.flBuildTime/60.0);
+				CPrintToChat(i, "{red}[NewBuild] {white}%s Built, Will activate in %f Seconds.", pluginName, base.flBuildTime);
 			}
 		}
 	}
@@ -339,34 +348,111 @@ public bool NB_OnBuild(const CBaseStructure base) // 2
 		return false;
 	}
 	base.iEntity = iBuilding;
+	base.iUpgradeLvl = 1;
+	base.flBuildTimeLeft = 1.0;
+	if (flags & FLAG_METALREQ) {
+		int iCurrentMetal = GetEntProp(client, Prop_Data, "m_iAmmo", 4, 3);
+		iCurrentMetal -= base.iMetalBuild;
+		SetEntProp(client, Prop_Data, "m_iAmmo", iCurrentMetal, 4, 3);
+	}
+	/*if (flags & FLAG_REPLACE) {
+		for (int ent=MaxClients+1 ; ent<2048 ; ++ent) {
+			if (!IsValidEdict(ent)) 
+				continue;
+			else if (!HasEntProp(ent, Prop_Send, "m_hBuilder"))
+				continue;
+			else if (GetBuilder(ent) != client)
+				continue;
+
+			SetVariantInt(GetEntProp(ent, Prop_Send, "m_iMaxHealth")+8);
+			AcceptEntityInput(ent, "RemoveHealth");
+		}
+	}*/
 	return true;
 }
 
 public Action OnBuildingTakeDamage(int victim, int& attacker, int& inflictor, float& damage, int& damagetype, int& weapon, float damageForce[3], float damagePosition[3], int damagecustom)
 {
-	if (!IsClientValid(attacker))
+	if (!IsClientValid(attacker) or victim < MaxClients)
 		return Plugin_Continue;
 	
 	int team = GetClientTeam(attacker);
 	if ( team == GetEntProp(victim, Prop_Data, "m_iTeamNum") and IsClientValid(attacker) ) {
 		//char tName[64]; GetEntPropString(victim, Prop_Data, "m_iName", tName, sizeof(tName));
-		
+		damage = 0.0;
 		int teamindex, vecindex;
 		vecindex = FindBaseByEntIndex(victim, teamindex);
-		if (teamindex == -1 or vecindex == -1)
+		if (vecindex == -1) {
+			CPrintToChat(attacker, "{red}[NewBuild] {white}OnBuildingTakeDamage::Invalid Structure.");
 			return Plugin_Continue;
-
-		char classname[32];
-		if ( IsValidEdict(weapon) )
-			GetEdictClassname(weapon, classname, sizeof(classname));
-
-		if ( !strcmp(classname, "tf_weapon_wrench", false) or !strcmp(classname, "tf_weapon_robot_arm", false) )
-		{
-			// OnEngieInteract
-			CBaseStructure map = hConstructs[teamindex].Get(vecindex);
-			NB_OnEngieInteract(map, GetClientUserId(attacker));
 		}
-		damage = 0.0;
+		//char classname[32];
+		//if ( IsValidEdict(weapon) )
+		//	GetEdictClassname(weapon, classname, sizeof(classname));
+
+		if ( weapon == GetPlayerWeaponSlot(attacker, 2) ) {
+			// OnEngieInteract
+			CBaseStructure map = hConstructs[team-2].Get(vecindex);
+			NB_OnEngieInteract(map, GetClientUserId(attacker));
+			int flags = map.iFlags;
+			if (flags & FLAG_BUILT) {
+				if (map.iHealth < map.iMaxHealth) {	// do repairs first
+					int repairamount = 25;	//default 10
+					int mult = 4;	//default 10
+				
+					if ( (flags & FLAG_FIXENG) and TF2_GetPlayerClass(attacker) != TFClass_Engineer)
+						return Plugin_Changed ;
+				
+					if (flags & FLAG_METALREQFIX) {
+						int iCurrentMetal = GetEntProp(attacker, Prop_Data, "m_iAmmo", 4, 3);
+				
+						if (iCurrentMetal < repairamount)
+							repairamount = iCurrentMetal;
+
+						if ( map.iMaxHealth-map.iHealth < repairamount*mult )
+							repairamount = RoundToCeil( float(map.iMaxHealth - map.iHealth)/float(mult) );
+
+						iCurrentMetal -= repairamount;
+						SetEntProp(attacker, Prop_Data, "m_iAmmo", iCurrentMetal, 4, 3);
+					}
+					map.iHealth += repairamount*mult;
+
+					if (map.iHealth > map.iMaxHealth)
+						map.iHealth = map.iMaxHealth;
+		
+					if (repairamount>0)
+						EmitSoundToClient(attacker, ( !GetRandomInt(0,1) ) ? "weapons/wrench_hit_build_success1.wav" : "weapons/wrench_hit_build_success2.wav" );
+					else EmitSoundToClient(attacker, "weapons/wrench_hit_build_fail.wav");
+				}
+				if ((flags & FLAG_UPGRADEABLE) and map.iUpgradeLvl < map.iMaxUpgradeLvl) {
+					int upgradeamount = 25;
+				
+					if ((flags & FLAG_UPGRADEENG) and TF2_GetPlayerClass(attacker) != TFClass_Engineer)
+						return Plugin_Changed ;
+				
+					if (flags & FLAG_METALREQUPGRADE) {
+						int iCurrentMetal = GetEntProp(attacker, Prop_Data, "m_iAmmo", 4, 3);
+						
+						if (iCurrentMetal < upgradeamount)
+							upgradeamount = iCurrentMetal;
+					
+						iCurrentMetal -= upgradeamount;
+						SetEntProp(attacker, Prop_Data, "m_iAmmo", iCurrentMetal, 4, 3);
+					}
+					map.iMetal += upgradeamount;
+					if (upgradeamount)
+						EmitSoundToClient(attacker, ( !GetRandomInt(0,1) ) ? "weapons/wrench_hit_build_success1.wav" : "weapons/wrench_hit_build_success2.wav" );
+					else EmitSoundToClient(attacker, "weapons/wrench_hit_build_fail.wav");
+				}
+			}
+			else if (flags & FLAG_HITSPEEDSBUILD) {
+				if ((flags & FLAG_HITSPEEDENG) and TF2_GetPlayerClass(attacker) != TFClass_Engineer)
+					return Plugin_Changed ;
+				
+				map.flBuildTimeLeft += 2.0;
+				EmitSoundToClient(attacker, ( !GetRandomInt(0,1) ) ? "weapons/wrench_hit_build_success1.wav" : "weapons/wrench_hit_build_success2.wav" );
+			}
+		}
 		return Plugin_Changed;
 	}
 	return Plugin_Continue;
@@ -420,7 +506,7 @@ public void OnPreThink(int client)
 	if (entity > MaxClients) {
 		int teamindex, vecindex;
 		vecindex = FindBaseByEntIndex(entity, teamindex);
-		if (teamindex == -1 or vecindex == -1)
+		if (vecindex == -1)
 			return ;
 		
 		CBaseStructure building = hConstructs[teamindex].Get(vecindex);
@@ -430,13 +516,16 @@ public void OnPreThink(int client)
 		if (building.iFlags & FLAG_BUILT) {
 			if (building.iFlags & FLAG_KILLABLE)
 				Format(info, sizeof(info), "%sBuilding Health: %i/%i\n", info, building.iHealth, building.iMaxHealth);
-			if (building.iFlags & FLAG_UPGRADEABLE)
-				Format(info, sizeof(info), "%sBuilding Level: %i\n", info, building.iUpgradeLvl);
+			if (building.iFlags & FLAG_UPGRADEABLE) {
+				if (building.iUpgradeLvl < building.iMaxUpgradeLvl)
+					Format(info, sizeof(info), "%sBuilding Level: %i\nBuilding Metal: %i/%i", info, building.iUpgradeLvl, building.iMetal, building.iMaxMetal);
+				else Format(info, sizeof(info), "%sBuilding Level: %i\n", info, building.iUpgradeLvl);
+			}
 		}
 		else {
 			if (building.iFlags & FLAG_KILLABLE)
-				Format(info, sizeof(info), "%sBuilding Health: %i/%i\n", info, GetEntProp(entity, Prop_Data, "m_iHealth"), building.iMaxHealth);
-			Format(info, sizeof(info), "%sBuilding Time: %i\n", info, RoundFloat(building.flBuildTime));
+				Format(info, sizeof(info), "%sBuilding Health: %i/%i\n", info, building.iHealth, building.iMaxHealth);
+			Format(info, sizeof(info), "%sBuilding Time: %i\n", info, RoundFloat(building.flBuildTime-building.flBuildTimeLeft));
 		}
 		ShowHudText(client, -1, info);
 	}
@@ -469,24 +558,39 @@ public Action Timer_BuildingThink(Handle timer)
 				hConstructs[team].Erase(i);
 				continue;
 			}
+			int flags = map.iFlags;
+			if ( (flags & FLAG_KILLDISC) and map.iBuilder <= 0) {
+				CreateTimer( 0.1, RemoveEnt, EntIndexToEntRef(map.iEntity) );
+				delete map;
+				hConstructs[team].Erase(i);
+				continue;
+			}
+			if ( (flags & FLAG_KILLTEAMSWITCH) and GetClientTeam(map.iBuilder) != GetEntProp( map.iEntity, Prop_Send, "m_iTeamNum" )) {
+				CreateTimer( 0.1, RemoveEnt, EntIndexToEntRef(map.iEntity) );
+				delete map;
+				hConstructs[team].Erase(i);
+				continue;
+			}
+			if ( (flags & FLAG_KILLDEATH) and !IsPlayerAlive(map.iBuilder)) {
+				CreateTimer( 0.1, RemoveEnt, EntIndexToEntRef(map.iEntity) );
+				delete map;
+				hConstructs[team].Erase(i);
+				continue;
+			}
 			
-			if ( !(map.iFlags & FLAG_BUILT) ) {	// handle building time
-				map.flBuildTime -= 0.1;
-				if (map.flBuildTime <= 0.0) {
-					map.flBuildTime = 0.0;
+			if ( !(flags & FLAG_BUILT) ) {	// handle building time
+				map.flBuildTimeLeft += 0.1;
+				if (map.flBuildTimeLeft >= map.flBuildTime) {
+					map.flBuildTimeLeft = map.flBuildTime;
 					map.iFlags |= FLAG_BUILT;
 				}
-				else {
-					//int buildinghp = GetEntProp(map.iEntity, Prop_Data, "m_iHealth");
-					if (map.flBuildTime >= 1.0) {	// avoid dividing by 0
-						int increase = map.iHealth/RoundFloat(map.flBuildTime);
-						if (increase < 0)
-							increase = 0;
-						SetEntProp(map.iEntity, Prop_Data, "m_iHealth", increase);
-					}
-				}
+				map.iHealth = RoundFloat(map.iMaxHealth*(map.flBuildTimeLeft/map.flBuildTime));
 			}
-			else {	// is finally built, let's think
+			else {		// is finally built, let's think
+				if ( (flags & FLAG_UPGRADEABLE) and map.iMetal >= map.iMaxMetal) {
+					map.iUpgradeLvl++;
+					map.iMetal = 0;
+				}
 				NB_OnThink(map);
 			}
 		}

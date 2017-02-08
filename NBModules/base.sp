@@ -127,6 +127,18 @@ methodmap CBaseStructure < Handle {
 			AsMap(this).SetValue("iUpgradeLvl", val);
 		}
 	}
+	property int iMaxUpgradeLvl
+	{
+		public get()
+		{
+			int item; AsMap(this).GetValue("iMaxUpgradeLvl", item);
+			return (item);
+		}
+		public set( const int val )
+		{
+			AsMap(this).SetValue("iMaxUpgradeLvl", val);
+		}
+	}
 	property int iGlowRef
 	{
 		public get()
@@ -139,6 +151,17 @@ methodmap CBaseStructure < Handle {
 			AsMap(this).SetValue("iGlowRef", EntIndexToEntRef(val));
 		}
 	}
+	/*property int iTeam
+	{
+		public get()
+		{
+			return GetEntProp( this.iEntity, Prop_Send, "m_iTeamNum" );
+		}
+		public set( const int val )
+		{
+			SetEntProp( this.iEntity, Prop_Send, "m_iTeamNum", val );
+		}
+	}*/
 	property float flBuildTime
 	{
 		public get()
@@ -149,6 +172,19 @@ methodmap CBaseStructure < Handle {
 		public set( const float val )
 		{
 			AsMap(this).SetValue("flBuildTime", val);
+		}
+	}
+	
+	property float flBuildTimeLeft
+	{
+		public get()
+		{
+			float item; AsMap(this).GetValue("flBuildTimeLeft", item);
+			return (item);
+		}
+		public set( const float val )
+		{
+			AsMap(this).SetValue("flBuildTimeLeft", val);
 		}
 	}
 	property Handle hPlugin
