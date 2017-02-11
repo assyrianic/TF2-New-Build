@@ -11,11 +11,17 @@
 #define and			&&
 #define or			||
 
+// use these for custom flags on custom buildings.
+#define	SetBit(%1, %2)		( (%1) |= 1 << ((%2)) )
+#define	ClearBit(%1, %2)	( (%1) &= ~(1 << ((%2)) )
+#define	TestBit(%1, %2)		( (%1) & (1 << ((%2)) )
+
+
 enum { __a = 1, __b, __c, __d, __e, __f, __g, __h, __i, __j, __k, __l, __m,
 	__n, __o, __p, __q, __r, __s, __t, __u, __v, __w, __x, __y, __z
 };
 
-enum {		// flag enum.
+enum {		// flag enum, mostly used internally by the plugin
 	FLAG_RED = 1<<__a,		// useable by red team
 	FLAG_BLU = 1<<__b,		// useable by blu team. You can set both flags for the building to share with both teams
 	FLAG_REDBUILT = 1<<__c,		// built by someone in red team, set internally by the core plugin
@@ -26,11 +32,11 @@ enum {		// flag enum.
 	FLAG_METALREQ = 1<<__h,		// requires metal to build ?
 	FLAG_UPGRADEABLE = 1<<__i,	// can this structure be upgraded ?
 	FLAG_TEAMUNCOLLIDEABLE = 1<<__j,	// can teammates go through this ? Advised if structure can block paths
-	//FLAG_REPLACE = 1<<__k,		// does it replace an existing engineer building ? Unsupported for now
+	//FLAG_CARRIED = 1<<__k,		// is building being carried ?
 	FLAG_REQENG = 1<<__l,		// do you need to be an engie to build this ?
 	FLAG_UPGRADEENG = 1<<__m,	// do you need to be an engie to upgrade this ?
 	FLAG_FIXENG = 1<<__n,		// do you need to be an engie to fix this ?
-	FLAG_MOVEABLE = 1<<__o,		// is the structure moveable by the player ?
+	//FLAG_MOVEABLE = 1<<__o,		// is the structure moveable by the player ? doesn't work right, try it yourself.
 	FLAG_GLOW = 1<<__p,		// can builder and team see the structure through the walls ?
 	FLAG_KILLDISC = 1<<__q,		// destroy structure when owner disconnects?
 	FLAG_KILLTEAMSWITCH = 1<<__r,	// destroy structure when owner switches team?
@@ -40,7 +46,7 @@ enum {		// flag enum.
 	FLAG_BUILT = 1<<__v,		// fully built and is doing its job.
 	FLAG_METALREQFIX = 1<<__w,	// requires metal to fix? If set, will automatically set FLAG_FIXENG flag
 	FLAG_HITSPEEDSBUILD = 1<<__x,	// does wrenches or melees speed up building?
-	FLAG_HITSPEEDENG = 1<<__y,	// only engie melees can speed up building?
+	FLAG_HITSPEEDENG = 1<<__y,	// only engie melees can speed up building?  If set, will automatically set FLAG_HITSPEEDSBUILD flag
 };
 
 /*************************************************/
@@ -777,6 +783,11 @@ stock void StringToLower(const char[] input, char[] output, int size)
 	for (int i=0 ; i<size ; ++i)
 		output[i] = input[i] | ' ';
 }
+stock void StringToUpper(const char[] input, char[] output, int size)
+{
+	for (int i=0 ; i<size ; ++i)
+		output[i] = input[i] & '_';
+}
 stock bool ValidateName(const char[] name)
 {
 	int length = strlen(name);
@@ -812,7 +823,6 @@ stock int GetBuilder(const int ent)
 		return GetEntPropEnt(ent, Prop_Send, "m_hBuilder");
 	return -1;
 }
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -829,8 +839,8 @@ methodmap CStructure < Handle {
 	property int iFlags			- building flags.
 	property int iType			- building type, uses plugin index SO BE VERY CAREFUL.
 	property int iBuilder			- client index of builder; set using userid, returns client index.
-	property int iMetal			- current amount of metal building has in it.
-	property int iMaxMetal			- maxmetal required to upgrade this.
+	property int iUpgradeMetal		- current amount of metal building has in it.
+	property int iMaxUpgradeMetal		- maxmetal required to upgrade this.
 	property int iHealth			- if destructable, current health
 	property int iMaxHealth			- ditto, max health it can go to
 	property int iMetalBuild		- how much metal is required to first create this building?
@@ -844,29 +854,51 @@ native int NewBuild_Register(const char plugin_name[64]);
 
 enum {	// call back types
 	OnBuild=0,		// checks if the building already exists or not depending on flags, set building stuff like the model here
-	OnEngieInteract,
 	OnThink,		// 0.1 second timer, use GetGameTime within hook for lesser time
+	OnInteract,		// when a player melees a building that's fully built, will either fix or upgrade.
+	OnInteractPost,
+	OnConstructInteract,	// when a player melees a building that is constructing
+	OnConstructInteractPost,
 	OnMenuSelected		// LEAVE THIS AS LAST ONE, set flags when this calls
 };
 
 typeset NBHookCB {
-	// OnThink
-	// OnMenuSelected
-	function void (const int iModuleIndex, const CStructure building);
+	// OnThink - called ever 0.1 seconds (timer)
+	// OnMenuSelected - called after selecting a building from the menu.
+	function void	(const int iModuleIndex, const CStructure building);
 	
-	// OnBuild
-	function void (const int iModuleIndex, const CStructure building, const int buildingRef);
+	// OnBuild - called right after OnMenuSelected is called. Initiates building
+	function void	(const int iModuleIndex, const CStructure building, const int buildingRef);
 	
-	// OnEngieInteract
-	function void (const int iModuleIndex, const CStructure building, const int userid);
+	// OnInteract - called during fixing and upgrading
+	// amount will be the upgrade/fix amount that will be applied to the building.
+	// if engie and metal is required, amount will be subtracted from metal supply.
+	// fixing var is to see if the interaction is fixing or upgrading; false if upgrading.
+	// this forward is called BEFORE applying the metal and subtracting engie metal.
+	function void	(const int iModuleIndex, const CStructure building, const int fixerid, int& amount, const bool fixing);
+	
+	// OnInteractPost
+	function void	(const int iModuleIndex, const CStructure building, const int fixerid, const int amount, const bool fixing);
+	
+	// OnConstructInteract
+	function void	(const int iModuleIndex, const CStructure building, const int fixerid, float& amount);
+	
+	// OnConstructInteractPost
+	function void	(const int iModuleIndex, const CStructure building, const int fixerid, const float amount);
 };
 
-native void NewBuild_Hook(int type, NBHookCB func);
-native bool NewBuild_HookEx(int type, NBHookCB func);
+native void	NewBuild_Hook		(int type, NBHookCB func);
+native bool	NewBuild_HookEx		(int type, NBHookCB func);
 
 
-native void NewBuild_Unhook(int type, NBHookCB func);
-native bool NewBuild_UnhookEx(int type, NBHookCB func);
+native void	NewBuild_Unhook		(int type, NBHookCB func);
+native bool	NewBuild_UnhookEx	(int type, NBHookCB func);
+
+/*
+	returns the number of structures built per team
+*/
+native int	NewBuild_BuiltOnRed	();
+native int	NewBuild_BuiltOnBlu	();
 
 
 public SharedPlugin __pl_NewBuild = {
@@ -887,6 +919,8 @@ public __pl_NewBuild_SetNTVOptional()
 	MarkNativeAsOptional("NewBuild_HookEx");
 	MarkNativeAsOptional("NewBuild_Unhook");
 	MarkNativeAsOptional("NewBuild_UnhookEx");
+	MarkNativeAsOptional("NewBuild_BuiltOnRed");
+	MarkNativeAsOptional("NewBuild_BuiltOnBlu");
 
 	MarkNativeAsOptional("CStructure.CStructure");
 	MarkNativeAsOptional("CStructure.GetProperty");
